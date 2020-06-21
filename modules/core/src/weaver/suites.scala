@@ -74,10 +74,10 @@ trait PureIOSuite extends ConcurrentEffectSuite[IO] with BaseIOSuite {
 
 }
 
-trait MutableFSuite[F[_]] extends ConcurrentEffectSuite[F]  {
+trait MutableFResourceSuite[F[_]] extends ConcurrentEffectSuite[F]  {
 
   type Res
-  def sharedResource : Resource[F, Res]
+  protected def resource: Resource[F, Res]
 
   def maxParallelism : Int = 10000
   implicit def timer: Timer[F]
@@ -105,14 +105,7 @@ trait MutableFSuite[F[_]] extends ConcurrentEffectSuite[F]  {
       val argsFilter = filterTests(this.name)(args)
       val filteredTests = testSeq.collect { case (name, test) if argsFilter(name) => test }
       val parallism = math.max(1, maxParallelism)
-      if (filteredTests.isEmpty) Stream.empty // no need to allocate resources
-      else for {
-        resource <- Stream.resource(sharedResource)
-        tests = filteredTests.map(_.apply(resource))
-        testStream = Stream.emits(tests).lift[F]
-        result <- if (parallism > 1 ) testStream.parEvalMap(parallism)(identity)
-                  else testStream.evalMap(identity)
-      } yield result
+      applyResource(filteredTests, parallism)
     }
 
   private[this] var testSeq = Seq.empty[(String, Res => F[TestOutcome])]
@@ -122,10 +115,40 @@ trait MutableFSuite[F[_]] extends ConcurrentEffectSuite[F]  {
     new AssertionError(
       "Cannot define new tests after TestSuite was initialized"
     )
+  protected def applyResource(f: Seq[Res => F[TestOutcome]], parallism: Int):  Stream[F, TestOutcome]
+}
 
+trait MutableFSuite[F[_]] extends MutableFResourceSuite[F]  {
+  def sharedResource : Resource[F, Res]
+  override protected def resource: Resource[F, Res] = sharedResource
+
+  override protected def applyResource(filteredTests: Seq[Res => F[TestOutcome]], parallism: Int): Stream[F, TestOutcome] = {
+    if (filteredTests.isEmpty) Stream.empty // no need to allocate resources
+    else for {
+      resource <- Stream.resource(resource)
+      tests = filteredTests.map(_.apply(resource))
+      testStream = Stream.emits(tests).lift[F]
+      result <- if (parallism > 1 ) testStream.parEvalMap(parallism)(identity)
+      else testStream.evalMap(identity)
+    } yield result
+  }
+}
+trait MutableForEachSuite[F[_]] extends MutableFResourceSuite[F]  {
+  def foreachResource : Resource[F, Res]
+  override protected def resource: Resource[F, Res] = foreachResource
+
+  override protected def applyResource(filteredTests: Seq[Res => F[TestOutcome]], parallism: Int): Stream[F, TestOutcome] = {
+    if (filteredTests.isEmpty) Stream.empty // no need to allocate resources
+    else {
+      val testStream = Stream.emits(filteredTests).flatMap(Stream.resource(resource).map)
+      if (parallism > 1 ) testStream.parEvalMap(parallism)(identity)
+      else testStream.evalMap(identity)
+    }
+  }
 }
 
 trait MutableIOSuite extends MutableFSuite[IO] with BaseIOSuite
+trait MutableIOForeachSuite extends MutableForEachSuite[IO] with BaseIOSuite
 
 trait SimpleMutableIOSuite extends MutableIOSuite{
   type Res = Unit

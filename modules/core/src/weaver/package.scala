@@ -2,6 +2,7 @@ package object weaver {
   import java.util.regex.Pattern
 
   type IOSuite       = MutableIOSuite
+  type IOForEachSuite= MutableIOForeachSuite
   type SimpleIOSuite = SimpleMutableIOSuite
   type Event         = TestOutcome
 
